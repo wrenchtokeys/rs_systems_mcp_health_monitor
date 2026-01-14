@@ -95,7 +95,7 @@ class QueueMonitor:
             LEFT JOIN auth_user u ON t.user_id = u.id
             WHERE r.queue_status NOT IN ('COMPLETED', 'DENIED')
                 AND r.repair_date < datetime('now', '-{threshold_hours} hours')
-            ORDER BY r.updated_at ASC
+            ORDER BY r.repair_date ASC
             LIMIT 50
             """
             # For SQLite, we don't need parameters
@@ -135,12 +135,20 @@ class QueueMonitor:
                     rows = cursor.fetchall()
 
                     for row in rows:
+                        # Handle dates - SQLite returns strings, PostgreSQL returns datetime
+                        created_at = row[3]
+                        updated_at = row[4]
+                        if created_at and hasattr(created_at, 'isoformat'):
+                            created_at = created_at.isoformat()
+                        if updated_at and hasattr(updated_at, 'isoformat'):
+                            updated_at = updated_at.isoformat()
+
                         stuck_repairs.append({
                             "repair_id": row[0],
                             "unit_number": row[1],
                             "status": row[2],
-                            "created_at": row[3].isoformat() if row[3] else None,
-                            "updated_at": row[4].isoformat() if row[4] else None,
+                            "created_at": created_at,
+                            "updated_at": updated_at,
                             "customer_name": row[5],
                             "technician_id": row[6],
                             "technician_name": row[7],
@@ -152,30 +160,37 @@ class QueueMonitor:
         return stuck_repairs
 
     async def get_processing_times(self) -> Dict[str, Any]:
-        """Calculate average processing times between status transitions."""
-        query = """
-        WITH status_transitions AS (
-            SELECT
-                queue_status,
-                created_at,
-                updated_at,
-                CASE
-                    WHEN queue_status = 'COMPLETED' THEN
-                        EXTRACT(EPOCH FROM (updated_at - created_at)) / 3600
-                    ELSE NULL
-                END as completion_time_hours
-            FROM technician_portal_repair
-            WHERE created_at > now() - interval '30 days'
-        )
-        SELECT
-            AVG(completion_time_hours) as avg_completion_hours,
-            MIN(completion_time_hours) as min_completion_hours,
-            MAX(completion_time_hours) as max_completion_hours,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY completion_time_hours) as median_completion_hours,
-            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY completion_time_hours) as p95_completion_hours
-        FROM status_transitions
-        WHERE completion_time_hours IS NOT NULL
+        """Calculate average processing times between status transitions.
+
+        Note: Without created_at/updated_at columns, we return counts of completed
+        repairs and age since repair_date instead of true processing times.
         """
+        is_sqlite = 'sqlite' in settings.database.database_url.lower()
+
+        if is_sqlite:
+            # SQLite-compatible query - use repair_date since no created_at/updated_at
+            query = """
+            SELECT
+                COUNT(*) as completed_count,
+                AVG((julianday('now') - julianday(repair_date)) * 24) as avg_age_hours,
+                MIN((julianday('now') - julianday(repair_date)) * 24) as min_age_hours,
+                MAX((julianday('now') - julianday(repair_date)) * 24) as max_age_hours
+            FROM technician_portal_repair
+            WHERE queue_status = 'COMPLETED'
+                AND repair_date > datetime('now', '-30 days')
+            """
+        else:
+            # PostgreSQL query - use repair_date since no created_at/updated_at
+            query = """
+            SELECT
+                COUNT(*) as completed_count,
+                AVG(EXTRACT(EPOCH FROM (now() - repair_date)) / 3600) as avg_age_hours,
+                MIN(EXTRACT(EPOCH FROM (now() - repair_date)) / 3600) as min_age_hours,
+                MAX(EXTRACT(EPOCH FROM (now() - repair_date)) / 3600) as max_age_hours
+            FROM technician_portal_repair
+            WHERE queue_status = 'COMPLETED'
+                AND repair_date > now() - interval '30 days'
+            """
 
         processing_times = {}
         try:
@@ -186,11 +201,11 @@ class QueueMonitor:
 
                     if row:
                         processing_times = {
-                            "average_completion_hours": round(row[0] or 0, 2),
-                            "min_completion_hours": round(row[1] or 0, 2),
-                            "max_completion_hours": round(row[2] or 0, 2),
-                            "median_completion_hours": round(row[3] or 0, 2),
-                            "p95_completion_hours": round(row[4] or 0, 2)
+                            "completed_count_30d": row[0] or 0,
+                            "average_age_hours": round(row[1] or 0, 2),
+                            "min_age_hours": round(row[2] or 0, 2),
+                            "max_age_hours": round(row[3] or 0, 2),
+                            "note": "Processing times unavailable - schema lacks created_at/updated_at"
                         }
         except Exception as e:
             logger.error(f"Failed to get processing times: {e}")
@@ -199,27 +214,54 @@ class QueueMonitor:
 
     async def get_technician_queue_load(self) -> List[Dict[str, Any]]:
         """Get queue load per technician."""
-        query = """
-        SELECT
-            t.id as technician_id,
-            u.username as technician_name,
-            COUNT(r.id) as total_repairs,
-            SUM(CASE WHEN r.queue_status = 'IN_PROGRESS' THEN 1 ELSE 0 END) as in_progress,
-            SUM(CASE WHEN r.queue_status = 'PENDING' THEN 1 ELSE 0 END) as pending,
-            SUM(CASE WHEN r.queue_status = 'APPROVED' THEN 1 ELSE 0 END) as approved,
-            AVG(CASE
-                WHEN r.queue_status = 'IN_PROGRESS' THEN
-                    EXTRACT(EPOCH FROM (now() - r.updated_at)) / 3600
-                ELSE NULL
-            END) as avg_in_progress_hours
-        FROM technician_portal_technician t
-        JOIN auth_user u ON t.user_id = u.id
-        LEFT JOIN technician_portal_repair r ON t.id = r.technician_id
-            AND r.queue_status NOT IN ('COMPLETED', 'DENIED')
-        GROUP BY t.id, u.username
-        HAVING COUNT(r.id) > 0
-        ORDER BY total_repairs DESC
-        """
+        is_sqlite = 'sqlite' in settings.database.database_url.lower()
+
+        if is_sqlite:
+            # SQLite-compatible query - use repair_date since no updated_at column
+            query = """
+            SELECT
+                t.id as technician_id,
+                u.username as technician_name,
+                COUNT(r.id) as total_repairs,
+                SUM(CASE WHEN r.queue_status = 'IN_PROGRESS' THEN 1 ELSE 0 END) as in_progress,
+                SUM(CASE WHEN r.queue_status = 'PENDING' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN r.queue_status = 'APPROVED' THEN 1 ELSE 0 END) as approved,
+                AVG(CASE
+                    WHEN r.queue_status = 'IN_PROGRESS' THEN
+                        (julianday('now') - julianday(r.repair_date)) * 24
+                    ELSE NULL
+                END) as avg_in_progress_hours
+            FROM technician_portal_technician t
+            JOIN auth_user u ON t.user_id = u.id
+            LEFT JOIN technician_portal_repair r ON t.id = r.technician_id
+                AND r.queue_status NOT IN ('COMPLETED', 'DENIED')
+            GROUP BY t.id, u.username
+            HAVING COUNT(r.id) > 0
+            ORDER BY total_repairs DESC
+            """
+        else:
+            # PostgreSQL query - use repair_date since no updated_at column
+            query = """
+            SELECT
+                t.id as technician_id,
+                u.username as technician_name,
+                COUNT(r.id) as total_repairs,
+                SUM(CASE WHEN r.queue_status = 'IN_PROGRESS' THEN 1 ELSE 0 END) as in_progress,
+                SUM(CASE WHEN r.queue_status = 'PENDING' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN r.queue_status = 'APPROVED' THEN 1 ELSE 0 END) as approved,
+                AVG(CASE
+                    WHEN r.queue_status = 'IN_PROGRESS' THEN
+                        EXTRACT(EPOCH FROM (now() - r.repair_date)) / 3600
+                    ELSE NULL
+                END) as avg_in_progress_hours
+            FROM technician_portal_technician t
+            JOIN auth_user u ON t.user_id = u.id
+            LEFT JOIN technician_portal_repair r ON t.id = r.technician_id
+                AND r.queue_status NOT IN ('COMPLETED', 'DENIED')
+            GROUP BY t.id, u.username
+            HAVING COUNT(r.id) > 0
+            ORDER BY total_repairs DESC
+            """
 
         technician_load = []
         try:
@@ -245,23 +287,46 @@ class QueueMonitor:
 
     async def get_queue_throughput(self) -> Dict[str, Any]:
         """Calculate queue throughput metrics."""
-        query = """
-        WITH daily_stats AS (
+        is_sqlite = 'sqlite' in settings.database.database_url.lower()
+
+        if is_sqlite:
+            # SQLite-compatible query (no FILTER clause, use CASE WHEN instead)
+            query = """
+            WITH daily_stats AS (
+                SELECT
+                    DATE(repair_date) as date,
+                    SUM(CASE WHEN queue_status = 'REQUESTED' THEN 1 ELSE 0 END) as new_requests,
+                    SUM(CASE WHEN queue_status = 'COMPLETED' THEN 1 ELSE 0 END) as completed_repairs
+                FROM technician_portal_repair
+                WHERE repair_date > datetime('now', '-7 days')
+                GROUP BY DATE(repair_date)
+            )
             SELECT
-                DATE(created_at) as date,
-                COUNT(*) FILTER (WHERE queue_status = 'REQUESTED') as new_requests,
-                COUNT(*) FILTER (WHERE queue_status = 'COMPLETED') as completed_repairs
-            FROM technician_portal_repair
-            WHERE created_at > now() - interval '7 days'
-            GROUP BY DATE(created_at)
-        )
-        SELECT
-            AVG(new_requests) as avg_daily_requests,
-            AVG(completed_repairs) as avg_daily_completions,
-            SUM(new_requests) as total_requests_7d,
-            SUM(completed_repairs) as total_completions_7d
-        FROM daily_stats
-        """
+                AVG(new_requests) as avg_daily_requests,
+                AVG(completed_repairs) as avg_daily_completions,
+                SUM(new_requests) as total_requests_7d,
+                SUM(completed_repairs) as total_completions_7d
+            FROM daily_stats
+            """
+        else:
+            # PostgreSQL query - use repair_date since no created_at column
+            query = """
+            WITH daily_stats AS (
+                SELECT
+                    DATE(repair_date) as date,
+                    COUNT(*) FILTER (WHERE queue_status = 'REQUESTED') as new_requests,
+                    COUNT(*) FILTER (WHERE queue_status = 'COMPLETED') as completed_repairs
+                FROM technician_portal_repair
+                WHERE repair_date > now() - interval '7 days'
+                GROUP BY DATE(repair_date)
+            )
+            SELECT
+                AVG(new_requests) as avg_daily_requests,
+                AVG(completed_repairs) as avg_daily_completions,
+                SUM(new_requests) as total_requests_7d,
+                SUM(completed_repairs) as total_completions_7d
+            FROM daily_stats
+            """
 
         throughput = {}
         try:

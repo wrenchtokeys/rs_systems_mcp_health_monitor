@@ -62,30 +62,28 @@ class SQLiteMonitor:
             class CursorContextManager:
                 def __init__(self, connection):
                     self.connection = connection
-                    self.cursor = None
+                    # Initialize cursor immediately so methods work without 'with' block
+                    self.cursor = self.connection.cursor()
 
                 def cursor(self):
                     return self
 
                 def __enter__(self):
-                    self.cursor = self.connection.cursor()
                     return self.cursor
 
                 def __exit__(self, exc_type, exc_val, exc_tb):
                     if self.cursor:
                         self.cursor.close()
+                        self.cursor = None
 
                 def execute(self, *args, **kwargs):
-                    if self.cursor:
-                        return self.cursor.execute(*args, **kwargs)
+                    return self.cursor.execute(*args, **kwargs)
 
                 def fetchall(self):
-                    if self.cursor:
-                        return self.cursor.fetchall()
+                    return self.cursor.fetchall()
 
                 def fetchone(self):
-                    if self.cursor:
-                        return self.cursor.fetchone()
+                    return self.cursor.fetchone()
 
             # Wrap the connection
             class ConnectionWrapper:

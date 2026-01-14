@@ -312,6 +312,14 @@ class RSHealthMonitorServer:
                 logger.error(f"Error handling tool call {name}: {e}")
                 return [TextContent(type="text", text=f"Error: {str(e)}")]
 
+    def _get_health_score(self, result: Any) -> int:
+        """Safely extract health score from monitor result."""
+        if not isinstance(result, dict):
+            return 50  # Unknown/error state
+        if result.get("error"):
+            return 50  # Error state
+        return 100 if not result.get("has_issues") else 75
+
     async def _system_health_summary(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """Get comprehensive system health summary."""
         include_details = arguments.get("include_details", False)
@@ -323,23 +331,23 @@ class RSHealthMonitorServer:
         # Run enabled monitors
         if "database" in components and self.db_monitor and settings.features.enable_database_monitoring:
             results["database"] = await self.db_monitor.monitor()
-            health_scores["database"] = 100 if not results["database"].get("has_issues") else 75
+            health_scores["database"] = self._get_health_score(results["database"])
 
         if "api" in components and self.api_monitor and settings.features.enable_api_monitoring:
             results["api"] = await self.api_monitor.monitor()
-            health_scores["api"] = 100 if not results["api"].get("has_issues") else 75
+            health_scores["api"] = self._get_health_score(results["api"])
 
         if "queue" in components and self.queue_monitor and settings.features.enable_queue_monitoring:
             results["queue"] = await self.queue_monitor.monitor()
-            health_scores["queue"] = 100 if not results["queue"].get("has_issues") else 75
+            health_scores["queue"] = self._get_health_score(results["queue"])
 
         if "storage" in components and self.storage_monitor and settings.features.enable_s3_monitoring:
             results["storage"] = await self.storage_monitor.monitor()
-            health_scores["storage"] = 100 if not results["storage"].get("has_issues") else 75
+            health_scores["storage"] = self._get_health_score(results["storage"])
 
         if "activity" in components and self.activity_monitor and settings.features.enable_activity_monitoring:
             results["activity"] = await self.activity_monitor.monitor()
-            health_scores["activity"] = 100 if not results["activity"].get("has_issues") else 75
+            health_scores["activity"] = self._get_health_score(results["activity"])
 
         # Calculate overall health score
         if health_scores:

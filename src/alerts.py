@@ -230,16 +230,22 @@ class AlertManager:
         """Process monitoring results and generate alerts."""
         alerts_created = []
 
+        def safe_get(obj, key, default=None):
+            """Safely get a value from a dict, returning default if obj is not a dict."""
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return default
+
         # Process database monitoring results
         if "database" in results:
             db_results = results["database"]
-            if db_results.get("has_issues"):
+            if isinstance(db_results, dict) and db_results.get("has_issues"):
                 for issue in db_results.get("issues", []):
                     alert = await self.create_alert(
                         severity="warning",
                         component="database",
                         title="Database Performance Issue",
-                        message=issue,
+                        message=issue if isinstance(issue, str) else safe_get(issue, "message", str(issue)),
                         metadata={"monitor": "database", "issue": issue}
                     )
                     alerts_created.append(alert)
@@ -247,65 +253,65 @@ class AlertManager:
         # Process API monitoring results
         if "api" in results:
             api_results = results["api"]
-            if api_results.get("has_issues"):
+            if isinstance(api_results, dict) and api_results.get("has_issues"):
                 for issue in api_results.get("issues", []):
-                    severity = issue.get("severity", "warning")
+                    severity = safe_get(issue, "severity", "warning")
                     alert = await self.create_alert(
                         severity=severity,
                         component="api",
-                        title=issue.get("type", "API Issue"),
-                        message=issue.get("message", "API performance issue detected"),
-                        threshold_value=issue.get("threshold"),
-                        actual_value=issue.get("value"),
-                        metadata=issue
+                        title=safe_get(issue, "type", "API Issue"),
+                        message=safe_get(issue, "message", "API performance issue detected"),
+                        threshold_value=safe_get(issue, "threshold"),
+                        actual_value=safe_get(issue, "value"),
+                        metadata=issue if isinstance(issue, dict) else {"issue": issue}
                     )
                     alerts_created.append(alert)
 
         # Process queue monitoring results
         if "queue" in results:
             queue_results = results["queue"]
-            if queue_results.get("has_issues"):
+            if isinstance(queue_results, dict) and queue_results.get("has_issues"):
                 for issue in queue_results.get("issues", []):
-                    severity = issue.get("severity", "warning")
+                    severity = safe_get(issue, "severity", "warning")
                     alert = await self.create_alert(
                         severity=severity,
                         component="queue",
-                        title=issue.get("type", "Queue Issue"),
-                        message=issue.get("message", "Queue processing issue detected"),
-                        threshold_value=issue.get("threshold"),
-                        actual_value=issue.get("value"),
-                        metadata=issue
+                        title=safe_get(issue, "type", "Queue Issue"),
+                        message=safe_get(issue, "message", "Queue processing issue detected"),
+                        threshold_value=safe_get(issue, "threshold"),
+                        actual_value=safe_get(issue, "value"),
+                        metadata=issue if isinstance(issue, dict) else {"issue": issue}
                     )
                     alerts_created.append(alert)
 
         # Process storage monitoring results
         if "storage" in results:
             storage_results = results["storage"]
-            if storage_results.get("has_issues"):
+            if isinstance(storage_results, dict) and storage_results.get("has_issues"):
                 for issue in storage_results.get("issues", []):
-                    severity = issue.get("severity", "warning")
+                    severity = safe_get(issue, "severity", "warning")
                     alert = await self.create_alert(
                         severity=severity,
                         component="storage",
-                        title=issue.get("type", "Storage Issue"),
-                        message=issue.get("message", "Storage issue detected"),
-                        threshold_value=issue.get("threshold"),
-                        actual_value=issue.get("value"),
-                        metadata=issue
+                        title=safe_get(issue, "type", "Storage Issue"),
+                        message=safe_get(issue, "message", "Storage issue detected"),
+                        threshold_value=safe_get(issue, "threshold"),
+                        actual_value=safe_get(issue, "value"),
+                        metadata=issue if isinstance(issue, dict) else {"issue": issue}
                     )
                     alerts_created.append(alert)
 
         # Process activity monitoring results
         if "activity" in results:
             activity_results = results["activity"]
-            if activity_results.get("has_issues"):
+            if isinstance(activity_results, dict) and activity_results.get("has_issues"):
                 for issue in activity_results.get("issues", []):
                     alert = await self.create_alert(
-                        severity=issue.get("severity", "info"),
+                        severity=safe_get(issue, "severity", "info"),
                         component="activity",
-                        title=issue.get("type", "Activity Issue"),
-                        message=issue.get("message", "Activity pattern issue detected"),
-                        metadata=issue
+                        title=safe_get(issue, "type", "Activity Issue"),
+                        message=safe_get(issue, "message", "Activity pattern issue detected"),
+                        metadata=issue if isinstance(issue, dict) else {"issue": issue}
                     )
                     alerts_created.append(alert)
 
