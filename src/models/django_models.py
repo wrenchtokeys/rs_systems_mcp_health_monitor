@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class RepairStatus(str, Enum):
@@ -24,7 +24,8 @@ class DamageType(str, Enum):
     CRACK = "Crack"
     STAR_BREAK = "Star Break"
     BULLS_EYE = "Bull's Eye"
-    COMBINATION = "Combination"
+    COMBINATION_BREAK = "Combination Break"
+    HALF_MOON = "Half-Moon"
     OTHER = "Other"
 
 
@@ -39,12 +40,14 @@ class CustomerModel(BaseModel):
     city: Optional[str] = None
     state: Optional[str] = None
     zip_code: Optional[str] = None
+    email_verified: bool = False
+    email_verified_at: Optional[datetime] = None
+    phone_verified: bool = False
+    phone_verified_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    is_active: bool = True
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TechnicianModel(BaseModel):
@@ -52,19 +55,28 @@ class TechnicianModel(BaseModel):
 
     id: int
     user_id: int
-    phone: Optional[str] = None
-    address: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
-    zip_code: Optional[str] = None
+    phone_number: Optional[str] = None
+    expertise: Optional[str] = None
     is_active: bool = True
+    # Verification fields
+    email_verified: bool = False
+    email_verified_at: Optional[datetime] = None
+    phone_verified: bool = False
+    phone_verified_at: Optional[datetime] = None
+    # Manager fields
+    is_manager: bool = False
+    approval_limit: Optional[float] = None
+    can_assign_work: bool = False
+    can_override_pricing: bool = False
+    # Performance fields
+    repairs_completed: int = 0
+    average_repair_time: Optional[str] = None
+    customer_rating: Optional[float] = None
+    working_hours: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    last_repair_date: Optional[datetime] = None
-    total_repairs: int = 0
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RepairModel(BaseModel):
@@ -72,24 +84,36 @@ class RepairModel(BaseModel):
 
     id: int
     technician_id: int
-    customer_id: int
+    customer_id: Optional[int] = None
     unit_number: str
     repair_date: datetime
+    description: Optional[str] = None
     queue_status: RepairStatus
     damage_type: DamageType
+    cost: Optional[float] = None
+    cost_override: Optional[float] = None
+    override_reason: Optional[str] = None
+    drilled_before_repair: bool = False
+    windshield_temperature: Optional[float] = None
+    resin_viscosity: Optional[str] = None
+    # Photo fields
+    customer_submitted_photo: Optional[str] = None
     damage_photo_before: Optional[str] = None
     damage_photo_after: Optional[str] = None
+    additional_photos: List[str] = Field(default_factory=list)
+    # Notes
     customer_notes: Optional[str] = None
     technician_notes: Optional[str] = None
-    drilled_before_repair: bool = False
-    cost: Optional[float] = None
+    # Batch repair tracking
+    repair_batch_id: Optional[str] = None
+    break_number: Optional[int] = None
+    total_breaks_in_batch: Optional[int] = None
+    is_multi_break_estimate: bool = False
+    # Timestamps
     created_at: datetime
     updated_at: datetime
-    completion_time: Optional[datetime] = None
-    points_awarded: int = 0
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserModel(BaseModel):
@@ -106,25 +130,19 @@ class UserModel(BaseModel):
     last_login: Optional[datetime] = None
     date_joined: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RewardModel(BaseModel):
-    """Reward model representation."""
+    """Reward model representation - tracks customer points balance."""
 
     id: int
-    customer_id: int
-    point_balance: int = 0
-    total_points_earned: int = 0
-    total_points_redeemed: int = 0
-    last_earned_date: Optional[datetime] = None
-    last_redeemed_date: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
+    customer_user_id: int
+    points: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SystemMetrics(BaseModel):
